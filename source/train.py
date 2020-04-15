@@ -1,35 +1,160 @@
+import argparse
+import json
+import os
+import pickle
+import sys
+import sagemaker_containers
+import pandas as pd
 import torch
-import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
+import torch.utils.data
+from torchvision import datasets
+from torchvision import transforms
+from model import ConvNet
 
-## TODO: Complete this classifier
-class ConvNet(nn.Module):
-    
-    ## TODO: Define the init function
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        '''Defines layers of a neural network.
-           :param input_dim: Number of input features
-           :param hidden_dim: Size of hidden layer(s)
-           :param output_dim: Number of outputs
-         '''
-        super(ConvNet, self).__init__()
-        
-        # define all layers, here
-        self.input = nn.Linear(input_dim, hidden_dim)
-        self.hidden1 = nn.Linear(hidden_dim, output_dim)
-        self.sig = nn.Sigmoid()
-        self.dropout = nn.Dropout(0.2)
 
+def model_fn(model_dir):
+    """Load the PyTorch model from the `model_dir` directory."""
+    print("Loading model.")
+
+    # First, load the parameters used to create the model.
+    model_info = {}
+    model_info_path = os.path.join(model_dir, 'model_info.pth')
+    with open(model_info_path, 'rb') as f:
+        model_info = torch.load(f)
+
+    print("model_info: {}".format(model_info))
+
+    # Determine the device and construct the model.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ConvNet(model_info['input_dim'], model_info['hidden_dim'], model_info['output_dim'])
+
+    # Load the stored model parameters.
+    model_path = os.path.join(model_dir, 'model.pth')
+    with open(model_path, 'rb') as f:
+        model.load_state_dict(torch.load(f))
+
+    # Load the saved word_dict.
+    model.to(device).eval()
+
+    print("Done loading model.")
+    return model
+
+
+def _get_train_data_loader(batch_size, training_dir):
+    print("Get train data loader.")
+
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    train_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(training_dir, transform=transforms.Compose([
+        transforms.RandomResizedCrop(size=312, scale=(0.2, 1.0)),
+        transforms.RandomRotation(45, expand=True),
+        transforms.CenterCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])),
+    batch_size=batch_size, shuffle=True)
+
+    return train_loader
+
+
+def train(model, train_loader, epochs, optimizer, loss_fn, device):
+    """
+    This is the training method that is called by the PyTorch training script. The parameters
+    passed are as follows:
+    model        - The PyTorch model that we wish to train.
+    train_loader - The PyTorch DataLoader that should be used during training.
+    epochs       - The total number of epochs to train for.
+    optimizer    - The optimizer to use during training.
+    loss_fn      - The loss function used for training.
+    device       - Where the model and data should be loaded (gpu or cpu).
+    """
     
-    ## TODO: Define the feedforward behavior of the network
-    def forward(self, x):
-        '''Feedforward behavior of the net.
-           :param x: A batch of input features
-           :return: A single, sigmoid activated value
-         '''
-        # your code, here
-        x = F.relu(self.input(x))
-        x = F.relu(self.hidden1(x))
-        x = self.dropout(x)
-        x = self.sig(x)
-        return x
+    # TODO: Paste the train() method developed in the notebook here.
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss = 0
+        for batch in train_loader:         
+            batch_X, batch_y = batch
+            
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+            
+            # TODO: Complete this train method to train the model provided.
+            outputs = model(batch_X)
+            optimizer.zero_grad()
+            loss = loss_fn(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.data.item()
+        print("Epoch: {}, CrossEntropyLoss: {}".format(epoch, total_loss / len(train_loader)))
+
+
+if __name__ == '__main__':
+    # All of the model parameters and training parameters are sent as arguments when the script
+    # is executed. Here we set up an argument parser to easily access the parameters.
+
+    parser = argparse.ArgumentParser()
+
+    # Training Parameters
+    parser.add_argument('--batch-size', type=int, default=512, metavar='N',
+                        help='input batch size for training (default: 512)')
+    parser.add_argument('--epochs', type=int, default=10, metavar='N',
+                        help='number of epochs to train (default: 10)')
+    parser.add_argument('--seed', type=int, default=1, metavar='S',
+                        help='random seed (default: 1)')
+
+    # Model Parameters
+    parser.add_argument('--input_dim', type=int, default=32, metavar='N',
+                        help='size of the word embeddings (default: 32)')
+    parser.add_argument('--hidden_dim', type=int, default=100, metavar='N',
+                        help='size of the hidden dimension (default: 100)')
+    parser.add_argument('--output_dim', type=int, default=5000, metavar='N',
+                        help='size of the vocabulary (default: 5000)')
+
+    # SageMaker Parameters
+    parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
+    parser.add_argument('--current-host', type=str, default=os.environ['SM_CURRENT_HOST'])
+    parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
+    parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAIN'])
+    parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
+
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device {}.".format(device))
+
+    torch.manual_seed(args.seed)
+
+    # Load the training data.
+    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
+
+    # Build the model.
+    model = ConvNet(args.input_dim, args.hidden_dim, args.output_dim).to(device)
+
+    # Train the model.
+    optimizer = optim.Adam(model.parameters())
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    train(model, train_loader, args.epochs, optimizer, loss_fn, device)
+
+    # Save the parameters used to construct the model
+    model_info_path = os.path.join(args.model_dir, 'model_info.pth')
+    with open(model_info_path, 'wb') as f:
+        model_info = {
+            'input_dim': args.input_dim,
+            'hidden_dim': args.hidden_dim,
+            'output_dim': args.output_dim,
+        }
+        torch.save(model_info, f)
+
+    # Save the model parameters
+    model_path = os.path.join(args.model_dir, 'model.pth')
+    with open(model_path, 'wb') as f:
+        torch.save(model.cpu().state_dict(), f)
