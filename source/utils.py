@@ -12,5 +12,5 @@ def get_validation_dataset(val_dir):
                                        transforms.CenterCrop(224),
                                        transforms.ToTensor(),
                                        normalize,
-                                    ])
+                                    ]))
     return val_dataset
