@@ -16,7 +16,6 @@ class ConvNet(nn.Module):
         
         # resnet definition
         self.resnet = models.resnet50(pretrained=True)
-<<<<<<< HEAD
         resnet_num_ftrs = self.resnet.fc.in_features
         new_resnet_fc = nn.Linear(resnet_num_ftrs, hidden_dim)
         for param in self.resnet.parameters():
@@ -33,34 +32,16 @@ class ConvNet(nn.Module):
         
         # ensemble definition
         self.ensemble = nn.Linear(hidden_dim * 2, output_dim)
-=======
-        num_ftrs = self.resnet.fc.in_features
-        new_fc = nn.Linear(num_ftrs, output_dim)
-        
-        
-        for param in self.resnet.parameters():
-            param.requires_grad = False
 
-        self.resnet.fc = new_fc
-        # self.hidden2 = nn.Linear(hidden_dim, hidden_dim)
-        # self.hidden3 = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.Softmax(dim=1)
-        # self.dropout = nn.Dropout(0.2)
-        # self.bn = nn.BatchNorm1d(hidden_dim)
->>>>>>> 497c02e12e843c6d1c91be602578aaca8aa4b361
     
     def forward(self, x):
         '''Feedforward behavior of the net.
            :param x: A batch of input features
            :return: A single, sigmoid activated value
          '''
-<<<<<<< HEAD
         x1 = self.resnet(x)
         x2 = self.sqznet(x)
         x = torch.cat((x1, x2), dim=1)
         x = self.ensemble(F.relu(x))
-=======
-        # your code, here
-        x = self.softmax(self.resnet(x))
->>>>>>> 497c02e12e843c6d1c91be602578aaca8aa4b361
+
         return x
