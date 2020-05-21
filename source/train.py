@@ -197,10 +197,18 @@ if __name__ == '__main__':
                     'val': _get_test_data_loader(args.batch_size, args.test_dir, args.num_cpus)}
 
     # Build the model.
+<<<<<<< HEAD
     model = ConvNet(args.hidden_dim, args.output_dim).to(device)
     model = torch.nn.DataParallel(model) # recommended by sagemaker sdk python devs
     optimizer = optim.SGD([param for param in model.parameters() if param.requires_grad], lr=args.lr, momentum=args.momentum)
     criterion = torch.nn.CrossEntropyLoss()
+=======
+    model = ConvNet(args.input_dim, args.hidden_dim, args.output_dim).to(device)
+
+    # Train the model.
+    optimizer = optim.Adam([param for param in model.parameters() if param.requires_grad])
+    loss_fn = torch.nn.CrossEntropyLoss()
+>>>>>>> 497c02e12e843c6d1c91be602578aaca8aa4b361
 
     # train model
     train(model, data_loaders, args.epochs, optimizer, criterion, device)
