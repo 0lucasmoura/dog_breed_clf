@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import time
+import copy
 import pickle
 import sys
 import sagemaker_containers
@@ -9,6 +11,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.utils.data
+from torch.optim import lr_scheduler
 from torchvision import datasets
 from torchvision import transforms
 from model import ConvNet
@@ -28,7 +31,7 @@ def model_fn(model_dir):
 
     # Determine the device and construct the model.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = ConvNet(model_info['input_dim'], model_info['hidden_dim'], model_info['output_dim'])
+    model = torch.nn.DataParallel(ConvNet(model_info["hidden_dim"], model_info["output_dim"]))
 
     # Load the stored model parameters.
     model_path = os.path.join(model_dir, 'model.pth')
@@ -42,28 +45,43 @@ def model_fn(model_dir):
     return model
 
 
-def _get_train_data_loader(batch_size, training_dir):
-    print("Get train data loader.")
+def _get_train_data_loader(batch_size, data_dir, num_workers):
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
     train_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(training_dir, transform=transforms.Compose([
-        transforms.RandomResizedCrop(size=312, scale=(0.2, 1.0)),
-        transforms.RandomRotation(45, expand=True),
+        datasets.ImageFolder(data_dir, transform=transforms.Compose([
+        transforms.RandomResizedCrop(size=312, scale=(0.6, 1.0)),
+        transforms.RandomRotation(10, expand=True),
         transforms.CenterCrop(224),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
         transforms.ToTensor(),
         normalize,
     ])),
-    batch_size=batch_size, shuffle=True)
+    batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     return train_loader
 
 
-def train(model, train_loader, epochs, optimizer, loss_fn, device):
+def _get_test_data_loader(batch_size, data_dir, num_workers):
+
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    train_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(data_dir, transform=transforms.Compose([
+        transforms.Resize(224),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize,
+    ])),
+    batch_size=batch_size, shuffle=True, num_workers=num_workers)
+
+    return train_loader
+
+
+def train(model, dataloaders, num_epochs, optimizer, criterion, device):
     """
     This is the training method that is called by the PyTorch training script. The parameters
     passed are as follows:
@@ -74,26 +92,63 @@ def train(model, train_loader, epochs, optimizer, loss_fn, device):
     loss_fn      - The loss function used for training.
     device       - Where the model and data should be loaded (gpu or cpu).
     """
+    start = time.time()
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+    for epoch in range(num_epochs):
+        
+        print(f'Epoch {epoch}/{num_epochs - 1}')
+        print('-' * 30)
+        
+        for phase in ['train', 'val']:
+            model.train() if phase == 'train' else model.eval()
+            running_loss = 0.0
+            running_corrects = 0
+
+            for batch_X, batch_y in dataloaders[phase]:
+                
+                batch_X = batch_X.to(device)
+                batch_y = batch_y.to(device)
+                
+                optimizer.zero_grad()
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(batch_X)
+                    loss = criterion(outputs, batch_y)
+                    _, preds = torch.max(outputs, 1)
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+                running_loss += loss.item() * batch_X.size(0)
+                running_corrects += torch.sum(preds == batch_y.data)
+
+            epoch_loss = running_loss / len(dataloaders[phase].dataset)
+            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
+            
+            print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+    time_elapsed = time.time() - start
+    model.load_state_dict(best_model_wts)
+    print(f'Training complete in {(time_elapsed // 60):.0f}m {(time_elapsed % 60):.0f}s')
+    print(f'Best val Acc: {best_acc:4f}')
+
     
-    # TODO: Paste the train() method developed in the notebook here.
-    for epoch in range(1, epochs + 1):
-        model.train()
-        total_loss = 0
-        for batch in train_loader:         
-            batch_X, batch_y = batch
-            
-            batch_X = batch_X.to(device)
-            batch_y = batch_y.to(device)
-            
-            # TODO: Complete this train method to train the model provided.
-            outputs = model(batch_X)
-            optimizer.zero_grad()
-            loss = loss_fn(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.data.item()
-        print("Epoch: {}, CrossEntropyLoss: {}".format(epoch, total_loss / len(train_loader)))
+def save_model_params(args):
+    model_info_path = os.path.join(args.model_dir, 'model_info.pth')
+    with open(model_info_path, 'wb') as f:
+        model_info = {
+            'hidden_dim': args.hidden_dim,
+            'output_dim': args.output_dim
+        }
+        torch.save(model_info, f)
+
+        
+def save_model(model, model_path):
+    with open(model_path, 'wb') as f:
+        torch.save(model.cpu().state_dict(), f)
 
 
 if __name__ == '__main__':
@@ -103,7 +158,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Training Parameters
-    parser.add_argument('--batch-size', type=int, default=512, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=30, metavar='N',
                         help='input batch size for training (default: 512)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: 10)')
@@ -111,21 +166,26 @@ if __name__ == '__main__':
                         help='random seed (default: 1)')
 
     # Model Parameters
-    parser.add_argument('--input_dim', type=int, default=32, metavar='N',
-                        help='size of the word embeddings (default: 32)')
-    parser.add_argument('--hidden_dim', type=int, default=100, metavar='N',
-                        help='size of the hidden dimension (default: 100)')
-    parser.add_argument('--output_dim', type=int, default=5000, metavar='N',
-                        help='size of the vocabulary (default: 5000)')
+    parser.add_argument('--output_dim', type=int, default=120, metavar='N',
+                        help='number of classes of the problem')
+    parser.add_argument('--hidden_dim', type=int, default=120, metavar='N',
+                        help='hidden dim serving as outputs of trained models')
+    parser.add_argument('--lr', type=float, default=0.01, 
+                       help='learning rate of optimizer')
+    parser.add_argument('--momentum', type=float, default=0.9,
+                       help='momentum of sgd optmizer')
 
     # SageMaker Parameters
     parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
     parser.add_argument('--current-host', type=str, default=os.environ['SM_CURRENT_HOST'])
     parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
-    parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAIN'])
+    parser.add_argument('--train-dir', type=str, default=os.environ['SM_CHANNEL_TRAIN'])
+    parser.add_argument('--test-dir', type=str, default=os.environ['SM_CHANNEL_TEST'])
     parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
+    parser.add_argument('--num-cpus', type=int, default=os.environ['SM_NUM_CPUS'])
 
     args = parser.parse_args()
+    model_path = os.path.join(args.model_dir, 'model.pth')
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device {}.".format(device))
@@ -133,28 +193,18 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
 
     # Load the training data.
-    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
+    data_loaders = {'train': _get_train_data_loader(args.batch_size, args.train_dir, args.num_cpus),
+                    'val': _get_test_data_loader(args.batch_size, args.test_dir, args.num_cpus)}
 
     # Build the model.
-    model = ConvNet(args.input_dim, args.hidden_dim, args.output_dim).to(device)
+    model = ConvNet(args.hidden_dim, args.output_dim).to(device)
+    model = torch.nn.DataParallel(model) # recommended by sagemaker sdk python devs
+    optimizer = optim.SGD([param for param in model.parameters() if param.requires_grad], lr=args.lr, momentum=args.momentum)
+    criterion = torch.nn.CrossEntropyLoss()
 
-    # Train the model.
-    optimizer = optim.Adam(model.parameters())
-    loss_fn = torch.nn.CrossEntropyLoss()
+    # train model
+    train(model, data_loaders, args.epochs, optimizer, criterion, device)
 
-    train(model, train_loader, args.epochs, optimizer, loss_fn, device)
-
-    # Save the parameters used to construct the model
-    model_info_path = os.path.join(args.model_dir, 'model_info.pth')
-    with open(model_info_path, 'wb') as f:
-        model_info = {
-            'input_dim': args.input_dim,
-            'hidden_dim': args.hidden_dim,
-            'output_dim': args.output_dim,
-        }
-        torch.save(model_info, f)
-
-    # Save the model parameters
-    model_path = os.path.join(args.model_dir, 'model.pth')
-    with open(model_path, 'wb') as f:
-        torch.save(model.cpu().state_dict(), f)
+    # Save the model and its parameters
+    save_model_params(args)
+    save_model(model, model_path)
