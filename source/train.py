@@ -199,7 +199,7 @@ if __name__ == '__main__':
     # Build the model.
     model = ConvNet(args.hidden_dim, args.output_dim).to(device)
     model = torch.nn.DataParallel(model) # recommended by sagemaker sdk python devs
-    optimizer = optim.SGD([param for param in model.parameters() if param.requires_grad], lr=args.lr, momentum=args.momentum)
+    optimizer = optim.Adam([param for param in model.parameters() if param.requires_grad], lr=args.lr)
     criterion = torch.nn.CrossEntropyLoss()
 
     # train model
