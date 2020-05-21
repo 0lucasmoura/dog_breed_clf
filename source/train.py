@@ -139,7 +139,7 @@ if __name__ == '__main__':
     model = ConvNet(args.input_dim, args.hidden_dim, args.output_dim).to(device)
 
     # Train the model.
-    optimizer = optim.Adam(model.parameters())
+    optimizer = optim.Adam([param for param in model.parameters() if param.requires_grad])
     loss_fn = torch.nn.CrossEntropyLoss()
 
     train(model, train_loader, args.epochs, optimizer, loss_fn, device)
