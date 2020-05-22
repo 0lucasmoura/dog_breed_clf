@@ -46,7 +46,7 @@ def model_fn(model_dir):
 
 
 def _get_train_data_loader(batch_size, data_dir, num_workers):
-
+    """Returns the data loader for training, uses data augmentation to try to make the model to generalize better"""
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -65,7 +65,7 @@ def _get_train_data_loader(batch_size, data_dir, num_workers):
 
 
 def _get_test_data_loader(batch_size, data_dir, num_workers):
-
+    """Returns the data loader for testing the model during its training"""
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -86,10 +86,10 @@ def train(model, dataloaders, num_epochs, optimizer, criterion, device):
     This is the training method that is called by the PyTorch training script. The parameters
     passed are as follows:
     model        - The PyTorch model that we wish to train.
-    train_loader - The PyTorch DataLoader that should be used during training.
-    epochs       - The total number of epochs to train for.
+    dataloaders  - A Dict with DataLoaders for train and test.
+    num_epochs   - The total number of epochs to train for.
     optimizer    - The optimizer to use during training.
-    loss_fn      - The loss function used for training.
+    criterion    - The loss function used for training.
     device       - Where the model and data should be loaded (gpu or cpu).
     """
     start = time.time()
@@ -137,6 +137,7 @@ def train(model, dataloaders, num_epochs, optimizer, criterion, device):
 
     
 def save_model_params(args):
+    """Takes args to save model parameters to specified location"""
     model_info_path = os.path.join(args.model_dir, 'model_info.pth')
     with open(model_info_path, 'wb') as f:
         model_info = {
@@ -147,6 +148,7 @@ def save_model_params(args):
 
         
 def save_model(model, model_path):
+    """Receives model and the path to save it to"""
     with open(model_path, 'wb') as f:
         torch.save(model.cpu().state_dict(), f)
 

@@ -2,7 +2,7 @@ from torchvision import datasets
 from torchvision import transforms
 
 def get_validation_dataset(val_dir):
-    
+    """Returns a Dataset of Images for using on validation testing"""
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     
