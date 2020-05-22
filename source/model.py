@@ -5,12 +5,12 @@ import torch.nn.functional as F
 
 
 class ConvNet(nn.Module):
+    """Model based on feature extraction of resnet archtecture"""
     
     def __init__(self, hidden_dim, output_dim):
         '''Defines layers of a neural network.
-           :param input_dim: Number of input features
-           :param hidden_dim: Size of hidden layer(s)
-           :param output_dim: Number of outputs
+           :param hidden_dim: Size of hidden layer(s) // Not used in this specific model
+           :param output_dim: Number of outputs or classes
          '''
         super(ConvNet, self).__init__()
 
